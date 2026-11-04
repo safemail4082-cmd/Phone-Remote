@@ -42,6 +42,18 @@ final class TlsUtil {
         ctx = sc;
     }
 
+    /** Short human-readable description of an error and its cause. */
+    static String describe(Throwable t) {
+        StringBuilder sb = new StringBuilder(t.getClass().getSimpleName());
+        if (t.getMessage() != null) sb.append(": ").append(t.getMessage());
+        Throwable c = t.getCause();
+        if (c != null && c != t) {
+            sb.append("  <- ").append(c.getClass().getSimpleName());
+            if (c.getMessage() != null) sb.append(": ").append(c.getMessage());
+        }
+        return sb.toString();
+    }
+
     static X509Certificate clientCertificate(Context c) throws Exception {
         init(c);
         return clientCert;

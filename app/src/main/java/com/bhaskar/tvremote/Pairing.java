@@ -131,7 +131,7 @@ final class Pairing {
                 if (Pb.find(f, 41) != null) { cb.done(true, "Paired"); return; }
             }
         } catch (Exception e) {
-            if (!cancelled) cb.done(false, "Pairing failed: " + e.getMessage());
+            if (!cancelled) cb.done(false, "Pairing failed.\n" + TlsUtil.describe(e));
         } finally {
             close();
         }

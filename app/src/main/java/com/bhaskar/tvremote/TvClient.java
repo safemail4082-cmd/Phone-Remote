@@ -34,6 +34,7 @@ final class TvClient {
     private volatile OutputStream out;
     private volatile int gen;
     private volatile int state = IDLE;
+    private volatile String lastError = "";
 
     TvClient(Context c, Listener l) {
         ctx = c.getApplicationContext();
@@ -41,6 +42,8 @@ final class TvClient {
     }
 
     int state() { return state; }
+
+    String lastError() { return lastError; }
 
     boolean ready() { return state == READY; }
 
@@ -113,6 +116,7 @@ final class TvClient {
             }
         } catch (Exception e) {
             if (my != gen) return;
+            lastError = TlsUtil.describe(e);
             boolean unreachable = e instanceof ConnectException || e instanceof SocketTimeoutException
                     || e instanceof NoRouteToHostException || e instanceof UnknownHostException;
             if (unreachable) setState(FAILED, "net");

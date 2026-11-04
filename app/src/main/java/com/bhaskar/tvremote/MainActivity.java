@@ -33,6 +33,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.security.cert.X509Certificate;
+import javax.net.ssl.SSLSocket;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -64,6 +69,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private EditText kbInput;
     private String kbLast = "";
     private boolean kbSilent;
+    private String failKind = "";
+    private TextView diagText;
 
     // ------------------------------------------------------------------ lifecycle
     @Override
@@ -137,7 +144,10 @@ public class MainActivity extends Activity implements TvClient.Listener {
             updateChip();
             if (s == TvClient.READY) {
                 retries = 0;
+                failKind = "";
             } else if (s == TvClient.FAILED) {
+                failKind = msg == null ? "" : msg;
+                updateChip();
                 if ("pair".equals(msg)) {
                     if (!pairingActive && !host.isEmpty()) beginPairing(host);
                 } else if (resumed && retries++ < 4 && !host.isEmpty()) {
@@ -172,8 +182,10 @@ public class MainActivity extends Activity implements TvClient.Listener {
                     if (ok) {
                         toast("Paired with your TV");
                         client.connect(h);
-                    } else {
+                    } else if (message.startsWith("Pairing cancelled")) {
                         toast(message);
+                    } else {
+                        showInfo("Pairing did not finish", message);
                     }
                     updateChip();
                 });
@@ -310,6 +322,50 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 .show();
     }
 
+    // ------------------------------------------------------------------ diagnostics
+    private void showInfo(String title, String msg) {
+        new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                .setTitle(title).setMessage(msg).setPositiveButton("OK", null).show();
+    }
+
+    private String tcp(String h, int port) {
+        long t = SystemClock.uptimeMillis();
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress(h, port), 2500);
+            return "open (" + (SystemClock.uptimeMillis() - t) + " ms)";
+        } catch (Exception e) {
+            return "NOT reachable - " + TlsUtil.describe(e);
+        }
+    }
+
+    private void runDiagnostics() {
+        if (host.isEmpty()) { diagText.setText("No TV selected yet. Pick one from the list above."); return; }
+        diagText.setText("Testing...");
+        final String h = host;
+        new Thread(() -> {
+            StringBuilder sb = new StringBuilder();
+            String prefix = Discovery.localPrefix();
+            sb.append("TV address: ").append(h).append('\n');
+            sb.append("Phone Wi-Fi: ").append(prefix == null ? "NOT on Wi-Fi" : prefix + "x").append('\n');
+            if (prefix != null && !h.startsWith(prefix)) sb.append("Warning: TV is on a different network than the phone.\n");
+            sb.append("Port 6466 (remote): ").append(tcp(h, 6466)).append('\n');
+            sb.append("Port 6467 (pairing): ").append(tcp(h, 6467)).append('\n');
+            try {
+                SSLSocket s = TlsUtil.open(MainActivity.this, h, 6467, 6000);
+                X509Certificate c = (X509Certificate) s.getSession().getPeerCertificates()[0];
+                sb.append("Secure link: OK (").append(s.getSession().getProtocol()).append(", ")
+                        .append(c.getPublicKey().getAlgorithm()).append(")\n");
+                s.close();
+            } catch (Exception e) {
+                sb.append("Secure link: FAILED - ").append(TlsUtil.describe(e)).append('\n');
+            }
+            String le = client.lastError();
+            sb.append("Last remote error: ").append(le.isEmpty() ? "none" : le);
+            final String out = sb.toString();
+            runOnUiThread(() -> diagText.setText(out));
+        }).start();
+    }
+
     // ------------------------------------------------------------------ status chip
     private void updateChip() {
         int color;
@@ -320,7 +376,10 @@ public class MainActivity extends Activity implements TvClient.Listener {
             int s = client.state();
             if (s == TvClient.READY) { color = GOOD; t = tvName.isEmpty() ? host : tvName; }
             else if (s == TvClient.CONNECTING) { color = WARN; t = "Connecting..."; }
-            else if (s == TvClient.FAILED) { color = DANGER; t = "TV not reachable"; }
+            else if (s == TvClient.FAILED) {
+                if ("pair".equals(failKind)) { color = WARN; t = "Needs pairing"; }
+                else { color = DANGER; t = "TV not reachable"; }
+            }
             else { color = MUTED; t = "Not connected"; }
         }
         chipText.setText(t);
@@ -338,7 +397,9 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private void key(int code) {
         if (!client.ready()) {
             toast(host.isEmpty() ? "Choose your TV first" : "TV not connected yet");
-            if (!host.isEmpty() && client.state() != TvClient.CONNECTING && !pairingActive) client.connect(host);
+            if (!host.isEmpty() && client.state() != TvClient.CONNECTING && !pairingActive) {
+                if ("pair".equals(failKind)) beginPairing(host); else client.connect(host);
+            }
             return;
         }
         client.key(code);
@@ -824,6 +885,20 @@ public class MainActivity extends Activity implements TvClient.Listener {
         LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, -2);
         mlp.topMargin = dp(10);
         col.addView(manual, mlp);
+
+        TextView test = text("Test connection", 15, TEXT, true);
+        test.setGravity(Gravity.CENTER);
+        test.setBackground(ripple(rect(SURFACE2, 14)));
+        test.setPadding(0, dp(14), 0, dp(14));
+        test.setOnClickListener(v -> runDiagnostics());
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, -2);
+        tlp.topMargin = dp(10);
+        col.addView(test, tlp);
+        diagText = text("", 12, MUTED, false);
+        diagText.setTypeface(Typeface.MONOSPACE);
+        diagText.setPadding(dp(4), dp(12), dp(4), 0);
+        diagText.setTextIsSelectable(true);
+        col.addView(diagText);
 
         TextView pairAgain = text("Pair with the selected TV again", 14, MUTED, false);
         pairAgain.setGravity(Gravity.CENTER);
