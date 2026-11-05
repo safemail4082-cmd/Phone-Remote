@@ -2,6 +2,7 @@ package com.bhaskar.tvremote;
 
 import android.content.Context;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.math.BigInteger;
@@ -68,72 +69,104 @@ final class Pairing {
 
     private void run() {
         try {
-            SSLSocket s = TlsUtil.open(ctx, host, 6467, 7000);
-            sock = s;
-            s.setSoTimeout(20000);
-            OutputStream out = s.getOutputStream();
-            InputStream in = s.getInputStream();
-
-            out.write(msg(10, new Pb.W().s(1, "atvremote").s(2, "Android phone")));
-            out.flush();
-
-            // handshake: request -> option -> configuration -> (TV shows the code)
-            while (true) {
-                List<Pb.Field> f = Pb.parse(Pb.readFrame(in));
-                Pb.Field st = Pb.find(f, 2);
-                if (st != null && st.v != 200) { cb.done(false, "The TV refused pairing (code " + st.v + ")."); return; }
-                if (Pb.find(f, 11) != null) {
-                    out.write(msg(20, new Pb.W().m(1, encoding()).i(3, 1)));
-                    out.flush();
-                } else if (Pb.find(f, 20) != null) {
-                    out.write(msg(30, new Pb.W().m(1, encoding()).i(2, 1)));
-                    out.flush();
-                } else if (Pb.find(f, 31) != null) {
-                    break;
-                }
+            String[] protos = {null, "TLSv1.2"};
+            for (String proto : protos) {
+                if (cancelled) return;
+                if (session(proto) != null) return;   // finished (success or a clear failure)
+                // otherwise the TV hung up before answering: try the other TLS version
             }
-
-            RSAPublicKey cp = (RSAPublicKey) TlsUtil.clientCertificate(ctx).getPublicKey();
-            X509Certificate server = (X509Certificate) s.getSession().getPeerCertificates()[0];
-            if (!(server.getPublicKey() instanceof RSAPublicKey)) {
-                cb.done(false, "This TV uses a certificate type that is not supported.");
-                return;
-            }
-            RSAPublicKey sp = (RSAPublicKey) server.getPublicKey();
-
-            String error = null;
-            byte[] secret;
-            while (true) {
-                cb.needCode(error);
-                String code = codes.poll(180, TimeUnit.SECONDS);
-                if (cancelled || code == null || code.isEmpty()) { cb.done(false, "Pairing cancelled."); return; }
-                code = code.trim().toUpperCase();
-                if (!code.matches("[0-9A-F]{6}")) { error = "The code has 6 characters (0-9, A-F)."; continue; }
-                byte[] cb3 = new byte[3];
-                for (int i = 0; i < 3; i++) cb3[i] = (byte) Integer.parseInt(code.substring(i * 2, i * 2 + 2), 16);
-                MessageDigest md = MessageDigest.getInstance("SHA-256");
-                md.update(strip(cp.getModulus()));
-                md.update(strip(cp.getPublicExponent()));
-                md.update(strip(sp.getModulus()));
-                md.update(strip(sp.getPublicExponent()));
-                md.update(cb3, 1, 2);
-                secret = md.digest();
-                if (secret[0] != cb3[0]) { error = "That code was not right. Check the TV screen."; continue; }
-                break;
-            }
-
-            out.write(msg(40, new Pb.W().b(1, secret)));
-            out.flush();
-            while (true) {
-                List<Pb.Field> f = Pb.parse(Pb.readFrame(in));
-                Pb.Field st = Pb.find(f, 2);
-                if (st != null && st.v != 200) { cb.done(false, "The TV did not accept the code."); return; }
-                if (Pb.find(f, 41) != null) { cb.done(true, "Paired"); return; }
-            }
+            cb.done(false, "The TV hung up without answering.\nMake sure the TV is on and shows no other dialog, then try again.");
         } catch (Exception e) {
             if (!cancelled) cb.done(false, "Pairing failed.\n" + TlsUtil.describe(e));
         } finally {
             close();
+        }
+    }
+
+    /** Returns null when the TV closed the link before sending anything (caller may retry). */
+    private Boolean session(String proto) throws Exception {
+        close();
+        SSLSocket s = TlsUtil.open(ctx, host, 6467, 7000, proto);
+        sock = s;
+        s.setSoTimeout(20000);
+        OutputStream out = s.getOutputStream();
+        InputStream in = s.getInputStream();
+
+        out.write(msg(10, new Pb.W().s(1, "atvremote").s(2, "Android phone")));
+        out.flush();
+
+        // handshake: request -> option -> configuration -> (TV shows the code)
+        boolean first = true;
+        while (true) {
+            List<Pb.Field> f;
+            try {
+                f = Pb.parse(Pb.readFrame(in));
+            } catch (IOException e) {
+                if (first) return null;
+                throw e;
+            }
+            first = false;
+            Pb.Field st = Pb.find(f, 2);
+            if (st != null && st.v != 200) {
+                cb.done(false, "The TV refused pairing (code " + st.v + ").");
+                return Boolean.TRUE;
+            }
+            if (Pb.find(f, 11) != null) {
+                out.write(msg(20, new Pb.W().m(1, encoding()).i(3, 1)));
+                out.flush();
+            } else if (Pb.find(f, 20) != null) {
+                out.write(msg(30, new Pb.W().m(1, encoding()).i(2, 1)));
+                out.flush();
+            } else if (Pb.find(f, 31) != null) {
+                break;
+            }
+        }
+
+        RSAPublicKey cp = (RSAPublicKey) TlsUtil.clientCertificate(ctx).getPublicKey();
+        X509Certificate server = (X509Certificate) s.getSession().getPeerCertificates()[0];
+        if (!(server.getPublicKey() instanceof RSAPublicKey)) {
+            cb.done(false, "This TV uses a certificate type that is not supported.");
+            return Boolean.TRUE;
+        }
+        RSAPublicKey sp = (RSAPublicKey) server.getPublicKey();
+
+        String error = null;
+        byte[] secret;
+        while (true) {
+            cb.needCode(error);
+            String code = codes.poll(180, TimeUnit.SECONDS);
+            if (cancelled || code == null || code.isEmpty()) {
+                cb.done(false, "Pairing cancelled.");
+                return Boolean.TRUE;
+            }
+            code = code.trim().toUpperCase();
+            if (!code.matches("[0-9A-F]{6}")) { error = "The code has 6 characters (0-9, A-F)."; continue; }
+            byte[] cb3 = new byte[3];
+            for (int i = 0; i < 3; i++) cb3[i] = (byte) Integer.parseInt(code.substring(i * 2, i * 2 + 2), 16);
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update(strip(cp.getModulus()));
+            md.update(strip(cp.getPublicExponent()));
+            md.update(strip(sp.getModulus()));
+            md.update(strip(sp.getPublicExponent()));
+            md.update(cb3, 1, 2);
+            secret = md.digest();
+            if (secret[0] != cb3[0]) { error = "That code was not right. Check the TV screen."; continue; }
+            break;
+        }
+
+        out.write(msg(40, new Pb.W().b(1, secret)));
+        out.flush();
+        while (true) {
+            List<Pb.Field> f = Pb.parse(Pb.readFrame(in));
+            Pb.Field st = Pb.find(f, 2);
+            if (st != null && st.v != 200) {
+                cb.done(false, "The TV did not accept the code.");
+                return Boolean.TRUE;
+            }
+            if (Pb.find(f, 41) != null) {
+                cb.done(true, "Paired");
+                return Boolean.TRUE;
+            }
         }
     }
 }

@@ -56,7 +56,7 @@ final class TvClient {
         final int my = ++gen;
         closeSocket();
         setState(CONNECTING, "");
-        new Thread(() -> run(host, my), "tv-session").start();
+        new Thread(() -> run(host, my, null), "tv-session").start();
     }
 
     void disconnect() {
@@ -71,10 +71,10 @@ final class TvClient {
         out = null;
     }
 
-    private void run(String host, int my) {
+    private void run(String host, int my, String proto) {
         boolean gotFrame = false;
         try {
-            SSLSocket s = TlsUtil.open(ctx, host, 6466, 6000);
+            SSLSocket s = TlsUtil.open(ctx, host, 6466, 6000, proto);
             if (my != gen) { s.close(); return; }
             sock = s;
             out = s.getOutputStream();
@@ -119,6 +119,10 @@ final class TvClient {
             lastError = TlsUtil.describe(e);
             boolean unreachable = e instanceof ConnectException || e instanceof SocketTimeoutException
                     || e instanceof NoRouteToHostException || e instanceof UnknownHostException;
+            if (!unreachable && !gotFrame && proto == null) {
+                run(host, my, "TLSv1.2");   // some TVs only talk the older TLS version
+                return;
+            }
             if (unreachable) setState(FAILED, "net");
             else setState(FAILED, gotFrame ? "net" : "pair");
         } finally {
