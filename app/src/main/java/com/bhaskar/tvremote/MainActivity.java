@@ -70,6 +70,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private String kbLast = "";
     private boolean kbSilent;
     private String failKind = "";
+    private boolean autoSearching;
+    private long lastAuto;
     private TextView diagText;
 
     // ------------------------------------------------------------------ lifecycle
@@ -151,6 +153,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 if ("pair".equals(msg)) {
                     if (!pairingActive && !host.isEmpty()) beginPairing(host);
                 } else if (resumed && retries++ < 4 && !host.isEmpty()) {
+                    autoRediscover();
                     final String h = host;
                     ui.postDelayed(() -> {
                         if (resumed && h.equals(host) && client.state() == TvClient.FAILED && !pairingActive) client.connect(h);
@@ -184,6 +187,9 @@ public class MainActivity extends Activity implements TvClient.Listener {
                         client.connect(h);
                     } else if (message.startsWith("Pairing cancelled")) {
                         toast(message);
+                    } else if (message.contains("ConnectException") || message.contains("SocketTimeoutException")) {
+                        toast("The TV did not answer at that address - searching the network...");
+                        autoRediscover();
                     } else {
                         showInfo("Pairing did not finish", message);
                     }
@@ -320,6 +326,55 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    // ------------------------------------------------------------------ find the TV again
+    /** The router may give the TV a new address; look for it again and switch to it. */
+    private void autoRediscover() {
+        long now = SystemClock.uptimeMillis();
+        if (autoSearching || now - lastAuto < 15000) return;
+        autoSearching = true;
+        lastAuto = now;
+        final java.util.ArrayList<String[]> cands = new java.util.ArrayList<>();
+        final Discovery d2 = new Discovery();
+        Discovery.Cb cb = new Discovery.Cb() {
+            @Override
+            public void found(final String name, final String h) {
+                runOnUiThread(() -> { if (!h.equals(host)) cands.add(new String[]{name, h}); });
+            }
+
+            @Override
+            public void finished() {
+                ui.postDelayed(() -> {
+                    d2.stop();
+                    autoSearching = false;
+                    pickCandidate(cands);
+                }, 2000);
+            }
+        };
+        d2.start(this, cb);
+        Discovery.scan(cb);
+    }
+
+    private void pickCandidate(java.util.ArrayList<String[]> cands) {
+        if (client.ready() || pairingActive) return;
+        LinkedHashMap<String, String> uniq = new LinkedHashMap<>();
+        for (String[] c : cands) {
+            String old = uniq.get(c[1]);
+            if (old == null || old.equals("Android TV")) uniq.put(c[1], c[0]);
+        }
+        String[] best = null;
+        for (Map.Entry<String, String> en : uniq.entrySet()) {
+            if (!tvName.isEmpty() && en.getValue().equalsIgnoreCase(tvName)) best = new String[]{en.getValue(), en.getKey()};
+        }
+        if (best == null && uniq.size() == 1) {
+            Map.Entry<String, String> en = uniq.entrySet().iterator().next();
+            best = new String[]{en.getValue(), en.getKey()};
+        }
+        if (best == null) return;
+        String nm = best[0].equals("Android TV") && !tvName.isEmpty() ? tvName : best[0];
+        Toast.makeText(this, "Found your TV at " + best[1], Toast.LENGTH_LONG).show();
+        selectTv(best[1], nm);
     }
 
     // ------------------------------------------------------------------ diagnostics
