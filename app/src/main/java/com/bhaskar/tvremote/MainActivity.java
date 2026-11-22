@@ -52,7 +52,7 @@ public class MainActivity extends Activity implements TvClient.Listener {
     private TvClient client;
     private Discovery discovery;
     private Pairing pairing;
-    private AlertDialog codeDialog;
+    private AlertDialog codeDialog, progressDialog;
     private boolean pairingActive, resumed;
     private int retries;
     private long lastToast;
@@ -167,31 +167,73 @@ public class MainActivity extends Activity implements TvClient.Listener {
     public void onVolume(int level, int max, boolean muted) { }
 
     // ------------------------------------------------------------------ pairing
+    private String tips() {
+        return "Tips: close the Google TV app and any other remote app on every phone, keep the TV on its home screen, then try again.";
+    }
+
+    private void showProgress(String msg) {
+        if (progressDialog == null || !progressDialog.isShowing()) {
+            progressDialog = new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                    .setTitle("Pairing")
+                    .setMessage(msg)
+                    .setCancelable(false)
+                    .setNegativeButton("Cancel", (d, w) -> {
+                        if (pairing != null) pairing.cancel();
+                        pairingActive = false;
+                        updateChip();
+                    })
+                    .create();
+            progressDialog.show();
+        } else {
+            progressDialog.setMessage(msg);
+        }
+    }
+
+    private void dismissProgress() {
+        if (progressDialog != null) {
+            try { progressDialog.dismiss(); } catch (Exception ignored) { }
+            progressDialog = null;
+        }
+    }
+
     private void beginPairing(final String h) {
         if (pairing != null) pairing.cancel();
+        client.disconnect();
+        Trace.clear();
         pairingActive = true;
         updateChip();
+        showProgress("Connecting to your TV...");
         pairing = new Pairing(this, h, new Pairing.Cb() {
             @Override
+            public void status(final String text) {
+                runOnUiThread(() -> { if (pairingActive) showProgress(text); });
+            }
+
+            @Override
             public void needCode(final String error) {
-                runOnUiThread(() -> showCodeDialog(error));
+                runOnUiThread(() -> {
+                    dismissProgress();
+                    showCodeDialog(error);
+                });
             }
 
             @Override
             public void done(final boolean ok, final String message) {
                 runOnUiThread(() -> {
                     pairingActive = false;
+                    dismissProgress();
                     if (codeDialog != null) { try { codeDialog.dismiss(); } catch (Exception ignored) { } }
                     if (ok) {
                         toast("Paired with your TV");
-                        client.connect(h);
+                        ui.postDelayed(() -> client.connect(h), 1200);
                     } else if (message.startsWith("Pairing cancelled")) {
                         toast(message);
                     } else if (message.contains("ConnectException") || message.contains("SocketTimeoutException")) {
-                        toast("The TV did not answer at that address - searching the network...");
+                        showInfo("Could not reach the TV's pairing service",
+                                message + "\n\n" + tips() + "\n\nLog:\n" + Trace.tail(12));
                         autoRediscover();
                     } else {
-                        showInfo("Pairing did not finish", message);
+                        showInfo("Pairing did not finish", message + "\n\n" + tips() + "\n\nLog:\n" + Trace.tail(12));
                     }
                     updateChip();
                 });
@@ -415,7 +457,8 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 sb.append("Secure link: FAILED - ").append(TlsUtil.describe(e)).append('\n');
             }
             String le = client.lastError();
-            sb.append("Last remote error: ").append(le.isEmpty() ? "none" : le);
+            sb.append("Last remote error: ").append(le.isEmpty() ? "none" : le).append('\n');
+            sb.append("\nRecent log:\n").append(Trace.tail(16));
             final String out = sb.toString();
             runOnUiThread(() -> diagText.setText(out));
         }).start();

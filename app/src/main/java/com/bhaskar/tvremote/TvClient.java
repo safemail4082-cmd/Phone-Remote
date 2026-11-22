@@ -74,7 +74,7 @@ final class TvClient {
     private void run(String host, int my, String proto) {
         boolean gotFrame = false;
         try {
-            SSLSocket s = TlsUtil.open(ctx, host, 6466, 6000, proto);
+            SSLSocket s = TlsUtil.open(ctx, host, 6466, 6000, proto, TlsUtil.variant(ctx));
             if (my != gen) { s.close(); return; }
             sock = s;
             out = s.getOutputStream();
@@ -117,6 +117,7 @@ final class TvClient {
         } catch (Exception e) {
             if (my != gen) return;
             lastError = TlsUtil.describe(e);
+            Trace.add("remote session ended: " + lastError);
             boolean unreachable = e instanceof ConnectException || e instanceof SocketTimeoutException
                     || e instanceof NoRouteToHostException || e instanceof UnknownHostException;
             if (!unreachable && !gotFrame && proto == null) {
