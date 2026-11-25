@@ -70,7 +70,7 @@ final class Pairing {
         return b;
     }
 
-    private static String names(List<Pb.Field> fs) {
+    static String names(List<Pb.Field> fs) {
         StringBuilder sb = new StringBuilder();
         for (Pb.Field f : fs) {
             String n;

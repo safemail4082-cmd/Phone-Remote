@@ -1,6 +1,9 @@
 package com.bhaskar.tvremote;
 
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.wifi.WifiManager;
 import android.os.SystemClock;
 
@@ -42,13 +45,11 @@ final class Mdns {
             InetAddress group = InetAddress.getByName("224.0.0.251");
             NetworkInterface wifi = wifiInterface();
             try {
-                ms = new MulticastSocket(null);
-                ms.setReuseAddress(true);
-                ms.bind(new InetSocketAddress(5353));
+                ms = makeSocket(ctx, 5353);
                 Trace.add("search: listening on port 5353");
             } catch (Exception e) {
                 if (ms != null) ms.close();
-                ms = new MulticastSocket();
+                ms = makeSocket(ctx, 0);
                 Trace.add("search: using a private port");
             }
             ms.setTimeToLive(255);
@@ -98,11 +99,49 @@ final class Mdns {
         }
     }
 
+    /** A UDP socket tied to the Wi-Fi network (not mobile data). */
+    @SuppressWarnings("deprecation")
+    private static MulticastSocket makeSocket(Context ctx, int port) throws Exception {
+        MulticastSocket s = new MulticastSocket(null);
+        try {
+            s.setReuseAddress(true);
+            try {
+                ConnectivityManager cm = (ConnectivityManager) ctx.getApplicationContext()
+                        .getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) {
+                    for (Network n : cm.getAllNetworks()) {
+                        NetworkCapabilities nc = cm.getNetworkCapabilities(n);
+                        if (nc != null && nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                            n.bindSocket(s);
+                            Trace.add("search: tied to the Wi-Fi network");
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Trace.add("search: could not tie to Wi-Fi (" + e.getMessage() + ")");
+            }
+            s.bind(new InetSocketAddress(port));
+            return s;
+        } catch (Exception e) {
+            s.close();
+            throw e;
+        }
+    }
+
     private static NetworkInterface wifiInterface() {
         try {
+            NetworkInterface fallback = null;
             for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
-                if (ni.isUp() && !ni.isLoopback() && ni.getName().startsWith("wlan")) return ni;
+                if (!ni.isUp() || ni.isLoopback()) continue;
+                if (ni.getName().startsWith("wlan")) return ni;
+                if (fallback == null && ni.supportsMulticast()) {
+                    for (InetAddress a : Collections.list(ni.getInetAddresses())) {
+                        if (a instanceof Inet4Address && a.isSiteLocalAddress()) fallback = ni;
+                    }
+                }
             }
+            return fallback;
         } catch (Exception ignored) { }
         return null;
     }

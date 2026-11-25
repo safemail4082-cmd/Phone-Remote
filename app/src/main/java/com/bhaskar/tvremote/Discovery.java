@@ -8,10 +8,16 @@ import android.os.Looper;
 
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
+import java.net.Socket;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Finds Android TVs on the Wi-Fi using mDNS (no probing of the TV's ports). */
 final class Discovery {
@@ -51,14 +57,42 @@ final class Discovery {
 
         // our own mDNS question (the reliable path)
         new Thread(() -> {
+            final AtomicInteger count = new AtomicInteger();
             try {
-                Mdns.query(c, 7000, (name, host) -> { if (!stopped) cb.found(name, host); });
+                Mdns.query(c, 7000, (name, host) -> {
+                    count.incrementAndGet();
+                    if (!stopped) cb.found(name, host);
+                });
             } catch (Exception e) {
                 Trace.add("search error: " + TlsUtil.describe(e));
-            } finally {
-                cb.finished();
             }
+            // some routers do not pass mDNS between devices: fall back to a quick look for the remote port
+            if (count.get() == 0 && !stopped) {
+                Trace.add("search: nothing answered, trying a quick network scan");
+                scanPorts(cb);
+            }
+            cb.finished();
         }, "mdns").start();
+    }
+
+    /** Quick, polite scan: one short TCP connection per address to the remote port, closed at once. */
+    private void scanPorts(final Cb cb) {
+        String prefix = localPrefix();
+        if (prefix == null) return;
+        ExecutorService ex = Executors.newFixedThreadPool(24);
+        for (int i = 1; i < 255; i++) {
+            final String host = prefix + i;
+            ex.submit(() -> {
+                if (stopped) return;
+                try (Socket s = new Socket()) {
+                    s.connect(new InetSocketAddress(host, 6466), 600);
+                    Trace.add("scan: " + host + " answers on 6466");
+                    cb.found("Android TV", host);
+                } catch (Exception ignored) { }
+            });
+        }
+        ex.shutdown();
+        try { ex.awaitTermination(25, TimeUnit.SECONDS); } catch (InterruptedException ignored) { }
     }
 
     private void pump(final Cb cb) {
