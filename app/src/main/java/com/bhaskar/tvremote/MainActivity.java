@@ -308,7 +308,6 @@ public class MainActivity extends Activity implements TvClient.Listener {
             }
         };
         discovery.start(this, cb);
-        Discovery.scan(cb);
     }
 
     private void addDevice(String name, String h) {
@@ -395,7 +394,6 @@ public class MainActivity extends Activity implements TvClient.Listener {
             }
         };
         d2.start(this, cb);
-        Discovery.scan(cb);
     }
 
     private void pickCandidate(java.util.ArrayList<String[]> cands) {
@@ -425,36 +423,32 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 .setTitle(title).setMessage(msg).setPositiveButton("OK", null).show();
     }
 
-    private String tcp(String h, int port) {
-        long t = SystemClock.uptimeMillis();
-        try (Socket s = new Socket()) {
-            s.connect(new InetSocketAddress(h, port), 2500);
-            return "open (" + (SystemClock.uptimeMillis() - t) + " ms)";
-        } catch (Exception e) {
-            return "NOT reachable - " + TlsUtil.describe(e);
-        }
-    }
-
     private void runDiagnostics() {
-        if (host.isEmpty()) { diagText.setText("No TV selected yet. Pick one from the list above."); return; }
-        diagText.setText("Testing...");
+        diagText.setText("Testing... (about 10 seconds)");
         final String h = host;
         new Thread(() -> {
             StringBuilder sb = new StringBuilder();
             String prefix = Discovery.localPrefix();
-            sb.append("TV address: ").append(h).append('\n');
             sb.append("Phone Wi-Fi: ").append(prefix == null ? "NOT on Wi-Fi" : prefix + "x").append('\n');
-            if (prefix != null && !h.startsWith(prefix)) sb.append("Warning: TV is on a different network than the phone.\n");
-            sb.append("Port 6466 (remote): ").append(tcp(h, 6466)).append('\n');
-            sb.append("Port 6467 (pairing): ").append(tcp(h, 6467)).append('\n');
+            sb.append("Saved TV address: ").append(h.isEmpty() ? "none" : h).append('\n');
+            final java.util.ArrayList<String> seenTv = new java.util.ArrayList<>();
             try {
-                SSLSocket s = TlsUtil.open(MainActivity.this, h, 6467, 6000);
-                X509Certificate c = (X509Certificate) s.getSession().getPeerCertificates()[0];
-                sb.append("Secure link: OK (").append(s.getSession().getProtocol()).append(", ")
-                        .append(c.getPublicKey().getAlgorithm()).append(")\n");
-                s.close();
+                Mdns.query(MainActivity.this, 4000, (name, ip) -> seenTv.add(name + " at " + ip));
             } catch (Exception e) {
-                sb.append("Secure link: FAILED - ").append(TlsUtil.describe(e)).append('\n');
+                sb.append("Network search error: ").append(TlsUtil.describe(e)).append('\n');
+            }
+            sb.append("TVs announcing themselves: ")
+                    .append(seenTv.isEmpty() ? "none found" : android.text.TextUtils.join(", ", seenTv)).append('\n');
+            if (!h.isEmpty()) {
+                try {
+                    SSLSocket s = TlsUtil.open(MainActivity.this, h, 6466, 8000);
+                    sb.append("Secure link to ").append(h).append(" (6466): OK (")
+                            .append(s.getSession().getProtocol()).append(")\n");
+                    s.close();
+                } catch (Exception e) {
+                    sb.append("Secure link to ").append(h).append(" (6466): FAILED - ")
+                            .append(TlsUtil.describe(e)).append('\n');
+                }
             }
             String le = client.lastError();
             sb.append("Last remote error: ").append(le.isEmpty() ? "none" : le).append('\n');

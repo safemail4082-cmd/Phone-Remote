@@ -8,17 +8,12 @@ import android.os.Looper;
 
 import java.net.Inet4Address;
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
-import java.net.Socket;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
-/** Finds Android TVs on the Wi-Fi: mDNS first, plus a quick port scan as a backup. */
+/** Finds Android TVs on the Wi-Fi using mDNS (no probing of the TV's ports). */
 final class Discovery {
 
     interface Cb {
@@ -34,12 +29,13 @@ final class Discovery {
     private boolean resolving;
     private volatile boolean stopped;
 
-    void start(Context c, final Cb cb) {
+    void start(final Context c, final Cb cb) {
         stopped = false;
+        // Android's own finder (works on some phones, silently fails on others)
         try {
             nsd = (NsdManager) c.getApplicationContext().getSystemService(Context.NSD_SERVICE);
             dl = new NsdManager.DiscoveryListener() {
-                @Override public void onStartDiscoveryFailed(String t, int e) { }
+                @Override public void onStartDiscoveryFailed(String t, int e) { Trace.add("android finder not available (" + e + ")"); }
                 @Override public void onStopDiscoveryFailed(String t, int e) { }
                 @Override public void onDiscoveryStarted(String t) { }
                 @Override public void onDiscoveryStopped(String t) { }
@@ -52,6 +48,17 @@ final class Discovery {
             };
             nsd.discoverServices("_androidtvremote2._tcp", NsdManager.PROTOCOL_DNS_SD, dl);
         } catch (Exception ignored) { }
+
+        // our own mDNS question (the reliable path)
+        new Thread(() -> {
+            try {
+                Mdns.query(c, 7000, (name, host) -> { if (!stopped) cb.found(name, host); });
+            } catch (Exception e) {
+                Trace.add("search error: " + TlsUtil.describe(e));
+            } finally {
+                cb.finished();
+            }
+        }, "mdns").start();
     }
 
     private void pump(final Cb cb) {
@@ -104,27 +111,5 @@ final class Discovery {
             }
         } catch (Exception ignored) { }
         return null;
-    }
-
-    /** Looks for devices answering on the remote-control port (6466). */
-    static void scan(final Cb cb) {
-        new Thread(() -> {
-            final String prefix = localPrefix();
-            if (prefix != null) {
-                ExecutorService ex = Executors.newFixedThreadPool(48);
-                for (int i = 1; i < 255; i++) {
-                    final String host = prefix + i;
-                    ex.submit(() -> {
-                        try (Socket s = new Socket()) {
-                            s.connect(new InetSocketAddress(host, 6466), 700);
-                            cb.found("Android TV", host);
-                        } catch (Exception ignored) { }
-                    });
-                }
-                ex.shutdown();
-                try { ex.awaitTermination(25, TimeUnit.SECONDS); } catch (InterruptedException ignored) { }
-            }
-            cb.finished();
-        }, "scan").start();
     }
 }

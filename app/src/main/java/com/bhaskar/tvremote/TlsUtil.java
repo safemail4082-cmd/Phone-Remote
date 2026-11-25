@@ -122,7 +122,7 @@ final class TlsUtil {
                 + (proto == null ? "default TLS" : proto) + ")");
         Socket raw = new Socket();
         raw.connect(new InetSocketAddress(host, port), timeoutMs);
-        raw.setSoTimeout(timeoutMs);
+        raw.setSoTimeout(Math.max(timeoutMs, 12000));
         raw.setTcpNoDelay(true);
         SSLSocket s = (SSLSocket) ctxs[v].getSocketFactory().createSocket(raw, host, port, true);
         s.setUseClientMode(true);
