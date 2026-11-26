@@ -14,15 +14,47 @@ import javax.net.ssl.SSLSocket;
 /** Builds the plain-text connection report shown in error boxes and on the Test connection button. */
 final class Diag {
 
-    static String report(Context ctx, String host, boolean probe) {
+    private static String scanReport() {
+        if (Discovery.localIp() == null) return "Network scan: phone is not on Wi-Fi\n";
+        List<NetScan.Hit> hits = NetScan.run(new int[]{6466, 6467, 9551, 9552, 8008, 8009, 6095, 5555}, 400);
+        StringBuilder sb = new StringBuilder("Devices found on your Wi-Fi (ports checked: 6466 6467 9551 9552 8008 8009 6095 5555):\n");
+        StringBuilder quiet = new StringBuilder();
+        for (NetScan.Hit h : hits) {
+            if (h.open.isEmpty()) {
+                if (quiet.length() > 0) quiet.append(", ");
+                quiet.append(h.host.substring(h.host.lastIndexOf('.') + 1));
+                continue;
+            }
+            sb.append("  ").append(h.host).append("  open ").append(h.open);
+            if (!h.castName.isEmpty()) sb.append("  name: ").append(h.castName);
+            sb.append('\n');
+        }
+        if (quiet.length() > 0) sb.append("  other devices (no tested port open): .").append(quiet).append('\n');
+        return sb.toString();
+    }
+
+    static String report(final Context ctx, String host, boolean probe) {
         StringBuilder sb = new StringBuilder();
         String prefix = Discovery.localPrefix();
         sb.append("Phone Wi-Fi: ").append(prefix == null ? "NOT on Wi-Fi" : prefix + "x").append('\n');
         sb.append("TV address used: ").append(host.isEmpty() ? "none" : host).append('\n');
-        sb.append(Mdns.survey(ctx, 4500));
+
+        final String[] nsd = {""}, scan = {""};
+        Thread t1 = new Thread(() -> nsd[0] = NsdProbe.run(ctx, 4000), "nsd-probe");
+        Thread t2 = new Thread(() -> scan[0] = scanReport(), "scan-probe");
+        t1.start();
+        t2.start();
+        String survey = Mdns.survey(ctx, 4500);
+        try {
+            t1.join(8000);
+            t2.join(30000);
+        } catch (InterruptedException ignored) { }
+        sb.append(scan[0]).append(nsd[0]).append(survey);
+
         if (!host.isEmpty()) {
             for (int port : new int[]{6466, 6467, 9551, 9552}) {
-                sb.append("Port ").append(port).append(": ").append(portState(host, port)).append('\n');
+                sb.append("Port ").append(port).append(" on ").append(host).append(": ")
+                        .append(portState(host, port)).append('\n');
             }
             if (probe) {
                 for (int v = 0; v < TlsUtil.VARIANTS; v++) {

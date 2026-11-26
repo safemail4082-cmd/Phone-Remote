@@ -59,7 +59,7 @@ final class Discovery {
         new Thread(() -> {
             final AtomicInteger count = new AtomicInteger();
             try {
-                Mdns.query(c, 7000, (name, host) -> {
+                Mdns.query(c, 4000, (name, host) -> {
                     count.incrementAndGet();
                     if (!stopped) cb.found(name, host);
                 });
@@ -75,24 +75,16 @@ final class Discovery {
         }, "mdns").start();
     }
 
-    /** Quick, polite scan: one short TCP connection per address to the remote port, closed at once. */
+    /** Looks at the Wi-Fi's addresses for devices with the remote port or the Chromecast port open. */
     private void scanPorts(final Cb cb) {
-        String prefix = localPrefix();
-        if (prefix == null) return;
-        ExecutorService ex = Executors.newFixedThreadPool(24);
-        for (int i = 1; i < 255; i++) {
-            final String host = prefix + i;
-            ex.submit(() -> {
-                if (stopped) return;
-                try (Socket s = new Socket()) {
-                    s.connect(new InetSocketAddress(host, 6466), 600);
-                    Trace.add("scan: " + host + " answers on 6466");
-                    cb.found("Android TV", host);
-                } catch (Exception ignored) { }
-            });
+        for (NetScan.Hit h : NetScan.run(new int[]{6466, 8008}, 450)) {
+            if (stopped) return;
+            if (h.open.contains(6466) || h.open.contains(8008)) {
+                String name = h.castName.isEmpty() ? "Android TV" : h.castName;
+                Trace.add("scan: " + h.host + " open " + h.open + (h.castName.isEmpty() ? "" : " name " + h.castName));
+                cb.found(name, h.host);
+            }
         }
-        ex.shutdown();
-        try { ex.awaitTermination(25, TimeUnit.SECONDS); } catch (InterruptedException ignored) { }
     }
 
     private void pump(final Cb cb) {
@@ -127,6 +119,11 @@ final class Discovery {
     }
 
     static String localPrefix() {
+        String ip = localIp();
+        return ip == null ? null : ip.substring(0, ip.lastIndexOf('.') + 1);
+    }
+
+    static String localIp() {
         try {
             ArrayList<NetworkInterface> all = Collections.list(NetworkInterface.getNetworkInterfaces());
             for (int pass = 0; pass < 2; pass++) {
@@ -136,10 +133,7 @@ final class Discovery {
                     boolean wifi = n.startsWith("wlan") || n.startsWith("ap") || n.startsWith("swlan") || n.startsWith("eth");
                     if (pass == 0 && !wifi) continue;
                     for (InetAddress a : Collections.list(ni.getInetAddresses())) {
-                        if (a instanceof Inet4Address && a.isSiteLocalAddress()) {
-                            String ip = a.getHostAddress();
-                            return ip.substring(0, ip.lastIndexOf('.') + 1);
-                        }
+                        if (a instanceof Inet4Address && a.isSiteLocalAddress()) return a.getHostAddress();
                     }
                 }
             }
