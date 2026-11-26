@@ -31,7 +31,7 @@ final class Discovery {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ArrayDeque<NsdServiceInfo> queue = new ArrayDeque<>();
     private NsdManager nsd;
-    private NsdManager.DiscoveryListener dl;
+    private NsdManager.DiscoveryListener dl, dl2;
     private boolean resolving;
     private volatile boolean stopped;
 
@@ -53,6 +53,20 @@ final class Discovery {
                 }
             };
             nsd.discoverServices("_androidtvremote2._tcp", NsdManager.PROTOCOL_DNS_SD, dl);
+            // Mi TVs always announce themselves as Chromecast-built-in, even when the remote ports are closed
+            dl2 = new NsdManager.DiscoveryListener() {
+                @Override public void onStartDiscoveryFailed(String t, int e) { }
+                @Override public void onStopDiscoveryFailed(String t, int e) { }
+                @Override public void onDiscoveryStarted(String t) { }
+                @Override public void onDiscoveryStopped(String t) { }
+                @Override public void onServiceLost(NsdServiceInfo s) { }
+
+                @Override
+                public void onServiceFound(final NsdServiceInfo s) {
+                    main.post(() -> { queue.add(s); pump(cb); });
+                }
+            };
+            nsd.discoverServices("_googlecast._tcp", NsdManager.PROTOCOL_DNS_SD, dl2);
         } catch (Exception ignored) { }
 
         // our own mDNS question (the reliable path)
@@ -101,7 +115,17 @@ final class Discovery {
                 @Override
                 public void onServiceResolved(NsdServiceInfo si) {
                     InetAddress a = si.getHost();
-                    if (a instanceof Inet4Address && !stopped) cb.found(si.getServiceName(), a.getHostAddress());
+                    String type = String.valueOf(si.getServiceType());
+                    if (type.contains("googlecast")) {
+                        String model = attr(si, "md"), fn = attr(si, "fn");
+                        Trace.add("cast device '" + fn + "' model '" + model + "' at " + (a == null ? "?" : a.getHostAddress()));
+                        boolean mi = model.toLowerCase().startsWith("mitv") || si.getServiceName().toLowerCase().startsWith("mitv");
+                        if (mi && a instanceof Inet4Address && !stopped) {
+                            cb.found(fn.isEmpty() ? model : fn, a.getHostAddress());
+                        }
+                    } else if (a instanceof Inet4Address && !stopped) {
+                        cb.found(si.getServiceName(), a.getHostAddress());
+                    }
                     main.post(() -> { resolving = false; pump(cb); });
                 }
             });
@@ -110,8 +134,19 @@ final class Discovery {
         }
     }
 
+    static String attr(NsdServiceInfo si, String key) {
+        try {
+            byte[] b = si.getAttributes().get(key);
+            return b == null ? "" : new String(b, "UTF-8");
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     void stop() {
         stopped = true;
+        try { if (nsd != null && dl2 != null) nsd.stopServiceDiscovery(dl2); } catch (Exception ignored) { }
+        dl2 = null;
         try { if (nsd != null && dl != null) nsd.stopServiceDiscovery(dl); } catch (Exception ignored) { }
         dl = null;
         queue.clear();

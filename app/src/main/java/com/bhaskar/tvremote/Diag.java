@@ -56,6 +56,7 @@ final class Diag {
                 sb.append("Port ").append(port).append(" on ").append(host).append(": ")
                         .append(portState(host, port)).append('\n');
             }
+            sb.append(wideScan(host));
             if (probe) {
                 for (int v = 0; v < TlsUtil.VARIANTS; v++) {
                     sb.append("Pairing test (certificate ").append(v).append("): ")
@@ -64,6 +65,33 @@ final class Diag {
             }
         }
         return sb.toString();
+    }
+
+    /** Every port from 1 to 10000 on the TV: shows which services it really offers. */
+    private static String wideScan(final String host) { return scanRange(host, 10000, 400, 200); }
+
+    /** Every port from 1 to 65535: run this while the 4-digit code is showing on the TV. */
+    static String deepScan(final String host) {
+        long t = System.currentTimeMillis();
+        String r = scanRange(host, 65535, 300, 300);
+        return r + "(took " + (System.currentTimeMillis() - t) / 1000 + " s)\n";
+    }
+
+    private static String scanRange(final String host, final int max, final int timeoutMs, int threads) {
+        final java.util.concurrent.ConcurrentSkipListSet<Integer> open = new java.util.concurrent.ConcurrentSkipListSet<>();
+        java.util.concurrent.ExecutorService ex = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        for (int p = 1; p <= max; p++) {
+            final int port = p;
+            ex.submit(() -> {
+                try (Socket s = new Socket()) {
+                    s.connect(new InetSocketAddress(host, port), timeoutMs);
+                    open.add(port);
+                } catch (Exception ignored) { }
+            });
+        }
+        ex.shutdown();
+        try { ex.awaitTermination(240, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException ignored) { }
+        return "ALL open ports on " + host + " (1-" + max + "): " + (open.isEmpty() ? "none" : open.toString()) + "\n";
     }
 
     private static String portState(String h, int port) {

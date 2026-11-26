@@ -975,6 +975,22 @@ public class MainActivity extends Activity implements TvClient.Listener {
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, -2);
         tlp.topMargin = dp(10);
         col.addView(test, tlp);
+        TextView deep = text("Deep scan (run while the 4-digit code shows)", 14, TEXT, true);
+        deep.setGravity(Gravity.CENTER);
+        deep.setBackground(ripple(rect(SURFACE2, 14)));
+        deep.setPadding(0, dp(14), 0, dp(14));
+        deep.setOnClickListener(v -> {
+            if (host.isEmpty()) { toast("Choose your TV first"); return; }
+            final String h = host;
+            diagText.setText("Deep scan of " + h + " running (1-2 minutes). Keep the 4-digit code on the TV...");
+            new Thread(() -> {
+                final String out = "TV: " + h + "\n" + Diag.deepScan(h);
+                runOnUiThread(() -> diagText.setText(out));
+            }).start();
+        });
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-1, -2);
+        dlp.topMargin = dp(10);
+        col.addView(deep, dlp);
         final TextView modeRow = text(modeLabel(), 15, TEXT, true);
         modeRow.setGravity(Gravity.CENTER);
         modeRow.setBackground(ripple(rect(SURFACE2, 14)));
