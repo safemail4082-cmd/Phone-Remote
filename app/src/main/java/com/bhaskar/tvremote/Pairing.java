@@ -120,7 +120,7 @@ final class Pairing {
         OutputStream out = s.getOutputStream();
         InputStream in = s.getInputStream();
 
-        out.write(msg(10, new Pb.W().s(1, "atvremote").s(2, "Android phone")));
+        out.write(msg(10, new Pb.W().s(1, "androidtvremote2").s(2, "Android phone")));
         out.flush();
         Trace.add("sent pairing request");
         cb.status("Waiting for the TV to answer...");

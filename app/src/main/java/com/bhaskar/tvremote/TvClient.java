@@ -35,6 +35,11 @@ final class TvClient {
     private volatile int gen;
     private volatile int state = IDLE;
     private volatile String lastError = "";
+    /** 0 = Android TV remote service, 1 = Xiaomi MiLink (6091), 2 = Xiaomi old HTTP remote (6095) */
+    private volatile int backend;
+    private volatile MiLink mi;
+    private volatile String httpHost = "";
+    static final int MODE_AUTO = 0, MODE_ANDROID_TV = 1, MODE_XIAOMI = 2;
 
     TvClient(Context c, Listener l) {
         ctx = c.getApplicationContext();
@@ -56,7 +61,56 @@ final class TvClient {
         final int my = ++gen;
         closeSocket();
         setState(CONNECTING, "");
-        new Thread(() -> run(host, my, null), "tv-session").start();
+        new Thread(() -> start(host, my), "tv-session").start();
+    }
+
+    static int mode(Context c) {
+        return c.getApplicationContext().getSharedPreferences("remote", Context.MODE_PRIVATE).getInt("mode", MODE_AUTO);
+    }
+
+    static void saveMode(Context c, int m) {
+        c.getApplicationContext().getSharedPreferences("remote", Context.MODE_PRIVATE).edit().putInt("mode", m).apply();
+    }
+
+    /** Picks which of the TV's remote services to use, then starts it. */
+    private void start(String host, int my) {
+        int mode = mode(ctx);
+        boolean atv = mode != MODE_XIAOMI;
+        if (mode == MODE_AUTO) {
+            atv = MiLink.portOpen(host, 6466, 1500);
+            Trace.add("Android TV remote port 6466: " + (atv ? "open" : "not open"));
+        }
+        if (atv) {
+            backend = 0;
+            run(host, my, null);
+            return;
+        }
+        // Xiaomi's own services
+        try {
+            if (MiLink.portOpen(host, MiLink.PORT, 2000)) {
+                backend = 1;
+                final int g = my;
+                mi = MiLink.open(host, 4000, why -> {
+                    if (g == gen) { mi = null; setState(FAILED, "net"); }
+                });
+                if (my != gen) { mi.close(); mi = null; return; }
+                setState(READY, "");
+                return;
+            }
+            if (MiLink.httpAlive(host)) {
+                backend = 2;
+                httpHost = host;
+                if (my == gen) setState(READY, "");
+                return;
+            }
+        } catch (Exception e) {
+            lastError = TlsUtil.describe(e);
+            Trace.add("Xiaomi connection failed: " + lastError);
+        }
+        if (my == gen) {
+            lastError = "No remote service answered on ports 6466, 6091 or 6095";
+            setState(FAILED, "net");
+        }
     }
 
     void disconnect() {
@@ -69,6 +123,10 @@ final class TvClient {
         try { if (sock != null) sock.close(); } catch (Exception ignored) { }
         sock = null;
         out = null;
+        MiLink m = mi;
+        mi = null;
+        if (m != null) m.close();
+        httpHost = "";
     }
 
     private void run(String host, int my, String proto) {
@@ -146,11 +204,22 @@ final class TvClient {
         });
     }
 
-    void key(int code) {
+    void key(final int code) {
+        if (backend == 1) {
+            final MiLink m = mi;
+            if (m != null) io.execute(() -> m.key(code));
+            return;
+        }
+        if (backend == 2) {
+            final String h = httpHost;
+            if (!h.isEmpty()) io.execute(() -> MiLink.httpKey(h, code));
+            return;
+        }
         send(new Pb.W().m(10, new Pb.W().i(1, code).i(2, 3)).framed());   // direction 3 = short press
     }
 
     void openLink(String link) {
+        if (backend != 0) return;   // only the Android TV service can open links
         send(new Pb.W().m(90, new Pb.W().s(1, link)).framed());
     }
 

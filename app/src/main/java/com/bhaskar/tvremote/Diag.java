@@ -16,8 +16,8 @@ final class Diag {
 
     private static String scanReport() {
         if (Discovery.localIp() == null) return "Network scan: phone is not on Wi-Fi\n";
-        List<NetScan.Hit> hits = NetScan.run(new int[]{6466, 6467, 9551, 9552, 8008, 8009, 6095, 5555}, 400);
-        StringBuilder sb = new StringBuilder("Devices found on your Wi-Fi (ports checked: 6466 6467 9551 9552 8008 8009 6095 5555):\n");
+        List<NetScan.Hit> hits = NetScan.run(new int[]{6466, 6467, 6091, 9551, 9552, 8008, 8009, 6095, 5555}, 400);
+        StringBuilder sb = new StringBuilder("Devices found on your Wi-Fi (ports checked: 6466 6467 6091 9551 9552 8008 8009 6095 5555):\n");
         StringBuilder quiet = new StringBuilder();
         for (NetScan.Hit h : hits) {
             if (h.open.isEmpty()) {
@@ -52,7 +52,7 @@ final class Diag {
         sb.append(scan[0]).append(nsd[0]).append(survey);
 
         if (!host.isEmpty()) {
-            for (int port : new int[]{6466, 6467, 9551, 9552}) {
+            for (int port : new int[]{6466, 6467, 6091, 6095, 9551, 9552}) {
                 sb.append("Port ").append(port).append(" on ").append(host).append(": ")
                         .append(portState(host, port)).append('\n');
             }
@@ -84,7 +84,7 @@ final class Diag {
         try (SSLSocket s = TlsUtil.open(ctx, h, 6467, 6000, null, v)) {
             s.setSoTimeout(5000);
             s.getOutputStream().write(new Pb.W().i(1, 2).i(2, 200)
-                    .m(10, new Pb.W().s(1, "atvremote").s(2, "Android phone")).framed());
+                    .m(10, new Pb.W().s(1, "androidtvremote2").s(2, "Android phone")).framed());
             s.getOutputStream().flush();
             try {
                 List<Pb.Field> f = Pb.parse(Pb.readFrame(s.getInputStream()));

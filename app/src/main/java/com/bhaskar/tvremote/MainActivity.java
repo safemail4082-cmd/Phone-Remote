@@ -927,6 +927,13 @@ public class MainActivity extends Activity implements TvClient.Listener {
         return col;
     }
 
+    private String modeLabel() {
+        int m = TvClient.mode(this);
+        String n = m == TvClient.MODE_ANDROID_TV ? "Android TV (6-character code)"
+                : m == TvClient.MODE_XIAOMI ? "Xiaomi Mi TV (no code)" : "Automatic";
+        return "Connection type: " + n + "  (tap to change)";
+    }
+
     // ------------------------------------------------------------------ TV selection page
     private View buildTvPage() {
         ScrollView sv = new ScrollView(this);
@@ -968,6 +975,23 @@ public class MainActivity extends Activity implements TvClient.Listener {
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-1, -2);
         tlp.topMargin = dp(10);
         col.addView(test, tlp);
+        final TextView modeRow = text(modeLabel(), 15, TEXT, true);
+        modeRow.setGravity(Gravity.CENTER);
+        modeRow.setBackground(ripple(rect(SURFACE2, 14)));
+        modeRow.setPadding(0, dp(14), 0, dp(14));
+        modeRow.setOnClickListener(v -> {
+            int m = (TvClient.mode(this) + 1) % 3;
+            TvClient.saveMode(this, m);
+            modeRow.setText(modeLabel());
+            toast("Connection type changed");
+            if (!host.isEmpty() && !pairingActive) {
+                failKind = "";
+                client.connect(host);
+            }
+        });
+        LinearLayout.LayoutParams mdlp = new LinearLayout.LayoutParams(-1, -2);
+        mdlp.topMargin = dp(10);
+        col.addView(modeRow, mdlp);
         diagText = text("", 12, MUTED, false);
         diagText.setTypeface(Typeface.MONOSPACE);
         diagText.setPadding(dp(4), dp(12), dp(4), 0);
@@ -984,8 +1008,9 @@ public class MainActivity extends Activity implements TvClient.Listener {
         });
         col.addView(pairAgain);
 
-        TextView hint = text("The first time, your TV shows a 6-character code that you type on this phone. "
-                + "Works with Android TV / Google TV devices (including Mi TV with Android TV).", 12, MUTED, false);
+        TextView hint = text("Automatic mode picks the TV's own remote service. Android TV / Google TV devices show a "
+                + "6-character code the first time. Xiaomi Mi TVs without that service connect directly. "
+                + "If one type does not work, tap Connection type to try another.", 12, MUTED, false);
         hint.setPadding(0, dp(14), 0, 0);
         col.addView(hint);
 

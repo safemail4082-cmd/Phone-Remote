@@ -77,9 +77,9 @@ final class Discovery {
 
     /** Looks at the Wi-Fi's addresses for devices with the remote port or the Chromecast port open. */
     private void scanPorts(final Cb cb) {
-        for (NetScan.Hit h : NetScan.run(new int[]{6466, 8008}, 450)) {
+        for (NetScan.Hit h : NetScan.run(new int[]{6466, 8008, 6091, 6095}, 450)) {
             if (stopped) return;
-            if (h.open.contains(6466) || h.open.contains(8008)) {
+            if (h.open.contains(6466) || h.open.contains(8008) || h.open.contains(6091) || h.open.contains(6095)) {
                 String name = h.castName.isEmpty() ? "Android TV" : h.castName;
                 Trace.add("scan: " + h.host + " open " + h.open + (h.castName.isEmpty() ? "" : " name " + h.castName));
                 cb.found(name, h.host);
