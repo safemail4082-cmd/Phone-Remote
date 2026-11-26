@@ -229,8 +229,12 @@ public class MainActivity extends Activity implements TvClient.Listener {
                     } else if (message.startsWith("Pairing cancelled")) {
                         toast(message);
                     } else if (message.contains("ConnectException") || message.contains("SocketTimeoutException")) {
-                        showInfo("Could not reach the TV's pairing service",
-                                message + "\n\n" + tips() + "\n\nLog:\n" + Trace.tail(12));
+                        final String m2 = message;
+                        new Thread(() -> {
+                            final String rep = Diag.report(MainActivity.this, h, false);
+                            runOnUiThread(() -> showInfo("Could not reach the TV's pairing service",
+                                    m2 + "\n\n" + rep + "\n" + tips() + "\n\nLog:\n" + Trace.tail(8)));
+                        }).start();
                         autoRediscover();
                     } else {
                         showInfo("Pairing did not finish", message + "\n\n" + tips() + "\n\nLog:\n" + Trace.tail(12));
@@ -423,61 +427,11 @@ public class MainActivity extends Activity implements TvClient.Listener {
                 .setTitle(title).setMessage(msg).setPositiveButton("OK", null).show();
     }
 
-    private String portState(String h, int port) {
-        try (Socket s = new Socket()) {
-            s.connect(new InetSocketAddress(h, port), 1500);
-            return "open";
-        } catch (java.net.ConnectException e) {
-            return "closed (refused)";
-        } catch (java.net.SocketTimeoutException e) {
-            return "no answer";
-        } catch (Exception e) {
-            return TlsUtil.describe(e);
-        }
-    }
-
-    /** Opens the pairing channel, sends the pairing request and reports what the TV answers. */
-    private String probePairing(String h, int v) {
-        try (SSLSocket s = TlsUtil.open(this, h, 6467, 6000, null, v)) {
-            s.setSoTimeout(5000);
-            s.getOutputStream().write(new Pb.W().i(1, 2).i(2, 200)
-                    .m(10, new Pb.W().s(1, "atvremote").s(2, "Android phone")).framed());
-            s.getOutputStream().flush();
-            try {
-                java.util.List<Pb.Field> f = Pb.parse(Pb.readFrame(s.getInputStream()));
-                return "TV answered (" + Pairing.names(f) + ")";
-            } catch (java.io.IOException e) {
-                return "secure link OK but the TV did not answer - " + TlsUtil.describe(e);
-            }
-        } catch (Exception e) {
-            return "failed - " + TlsUtil.describe(e);
-        }
-    }
-
     private void runDiagnostics() {
-        diagText.setText("Testing... (about 10 seconds)");
+        diagText.setText("Testing... (about 15 seconds)");
         final String h = host;
         new Thread(() -> {
-            StringBuilder sb = new StringBuilder();
-            String prefix = Discovery.localPrefix();
-            sb.append("Phone Wi-Fi: ").append(prefix == null ? "NOT on Wi-Fi" : prefix + "x").append('\n');
-            sb.append("Saved TV address: ").append(h.isEmpty() ? "none" : h).append('\n');
-            final java.util.ArrayList<String> seenTv = new java.util.ArrayList<>();
-            try {
-                Mdns.query(MainActivity.this, 4000, (name, ip) -> seenTv.add(name + " at " + ip));
-            } catch (Exception e) {
-                sb.append("Network search error: ").append(TlsUtil.describe(e)).append('\n');
-            }
-            sb.append("TVs announcing themselves: ")
-                    .append(seenTv.isEmpty() ? "none found" : android.text.TextUtils.join(", ", seenTv)).append('\n');
-            if (!h.isEmpty()) {
-                for (int port : new int[]{6466, 6467, 9551, 9552}) {
-                    sb.append("Port ").append(port).append(": ").append(portState(h, port)).append('\n');
-                }
-                for (int v = 0; v < TlsUtil.VARIANTS; v++) {
-                    sb.append("Pairing test (certificate ").append(v).append("): ").append(probePairing(h, v)).append('\n');
-                }
-            }
+            StringBuilder sb = new StringBuilder(Diag.report(MainActivity.this, h, true));
             String le = client.lastError();
             sb.append("Last remote error: ").append(le.isEmpty() ? "none" : le).append('\n');
             sb.append("\nRecent log:\n").append(Trace.tail(16));
