@@ -112,7 +112,7 @@ final class Diag {
         try (SSLSocket s = TlsUtil.open(ctx, h, 6467, 6000, null, v)) {
             s.setSoTimeout(5000);
             s.getOutputStream().write(new Pb.W().i(1, 2).i(2, 200)
-                    .m(10, new Pb.W().s(1, "androidtvremote2").s(2, "Android phone")).framed());
+                    .m(10, new Pb.W().s(1, "atvremote").s(2, "Android phone")).framed());
             s.getOutputStream().flush();
             try {
                 List<Pb.Field> f = Pb.parse(Pb.readFrame(s.getInputStream()));
